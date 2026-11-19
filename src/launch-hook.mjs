@@ -82,6 +82,8 @@ export function withProgressTool(command, { execPath, serverPath }) {
     `mcp_servers.milestone.command=${JSON.stringify(execPath)}`,
     `mcp_servers.milestone.args=${JSON.stringify([serverPath])}`,
     'mcp_servers.milestone.env={ELECTRON_RUN_AS_NODE="1"}',
+    // Codex passes a server only the variables it names; this one tells the pane it runs in.
+    'mcp_servers.milestone.env_vars=["ORCA_PANE_KEY"]',
     // It only writes the plugin's own progress file, so it never asks the user.
     'mcp_servers.milestone.default_tools_approval_mode="approve"',
     `developer_instructions=${JSON.stringify(INSTRUCTIONS)}`

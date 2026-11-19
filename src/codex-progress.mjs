@@ -26,12 +26,13 @@ export async function readCodexProgress(dir, { running = isRunning } = {}) {
       .map(async (name) => {
         const file = join(dir, name)
         try {
-          const { pid, cwd, paneKey = null, goal, updatedAt, tasks } = JSON.parse(await readFile(file, 'utf8'))
+          const { pid, cwd, paneKey, goal, updatedAt, tasks } = JSON.parse(await readFile(file, 'utf8'))
           if (!running(pid)) {
             await rm(file, { force: true })
             return null
           }
-          return { listId: name.slice(0, -'.json'.length), cwd, paneKey, goal, updatedAt, tasks }
+          // A file written before the server recorded its pane has none, and its pid tells it.
+          return { listId: name.slice(0, -'.json'.length), pid, cwd, ...(paneKey !== undefined ? { paneKey } : {}), goal, updatedAt, tasks }
         } catch {
           return null
         }

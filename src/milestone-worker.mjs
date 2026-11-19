@@ -139,10 +139,13 @@ export function createMilestoneWorker({
     if (isFinished(tasks)) lastTasks.set(list.listId, tasks)
   }
 
-  /** The pane of the session that owns a list: the session named by it, or the lead of its team. */
+  /**
+   * The pane of the session that owns a list: the session named by it, or the lead of its team.
+   * Undefined when its process could not be read.
+   */
   async function paneOfList(listId, running) {
     const owner = running.find((entry) => (isSessionId(listId) ? entry.sessionId === listId : entry.sessionId.startsWith(`${listId.slice('session-'.length)}-`)))
-    return owner ? ((await paneOf(owner)) ?? null) : null
+    return owner ? paneOf(owner) : null
   }
 
   async function allSessions() {
@@ -164,9 +167,15 @@ export function createMilestoneWorker({
       if (tasks.length === 0) continue
       const head = await headOf(list.listId)
       if (!head?.cwd) continue
-      sessions.push({ ...list, cwd: head.cwd, paneKey: await paneOfList(list.listId, runningSessions), ...(await goalOf(list.listId, head, tasks)) })
+      const paneKey = await paneOfList(list.listId, runningSessions)
+      // Without its pane a list could show under another workspace; the next refresh reads it again.
+      if (paneKey === undefined) continue
+      sessions.push({ ...list, cwd: head.cwd, paneKey, ...(await goalOf(list.listId, head, tasks)) })
     }
-    sessions.push(...(await readCodexProgress(progressRoot)))
+    for (const { pid, ...list } of await readCodexProgress(progressRoot)) {
+      const paneKey = 'paneKey' in list ? list.paneKey : await paneOf({ pid, sessionId: list.listId })
+      if (paneKey !== undefined) sessions.push({ ...list, paneKey })
+    }
     return sessions.sort((a, b) => b.updatedAt - a.updatedAt)
   }
 

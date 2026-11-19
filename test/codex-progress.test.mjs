@@ -35,6 +35,7 @@ test('a recorded plan is read back as a list while its session runs', async () =
   assert.deepEqual(lists, [
     {
       listId: 'codex-4242',
+      pid: 4242,
       paneKey: 'tab:codex',
       cwd: '/work/app',
       goal: 'Ship',

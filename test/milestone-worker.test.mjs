@@ -305,3 +305,32 @@ test('openWorkspace opens the listed workspace at the path, and only logs a miss
   assert.deepEqual(await worker.openWorkspace('/work/a'), { opened: false })
   assert.match(logs.join('\n'), /could not open the workspace: refused/)
 })
+
+test('two agents in one workspace each show their own list, and a list whose pane was not read waits', async () => {
+  const home = await makeHome()
+  const orca = fakeOrca()
+  await writeTranscript(home, SESSION_A, { cwd: '/work/app', prompt: 'Fix the UI' })
+  await writeTasks(home, SESSION_A, [task(1, 'Restyle', 'in_progress')])
+  await writeTranscript(home, SESSION_B, { cwd: '/work/app', prompt: 'Write tests' })
+  await writeTasks(home, SESSION_B, [task(1, 'Cover the model', 'pending')])
+  const panes = { [SESSION_A]: 'tab:a', [SESSION_B]: 'tab:b' }
+  const agents = [
+    { paneKey: 'tab:a', title: 'UI', state: 'working', background: false },
+    { paneKey: 'tab:b', title: 'Tests', state: 'working', background: false }
+  ]
+  const worker = createMilestoneWorker({
+    orca,
+    home,
+    cli: 'orca',
+    paneOf: async ({ sessionId }) => panes[sessionId],
+    readOrca: async () => ({ active: { path: '/work/app', displayName: 'app', agentStates: ['working', 'working'], agents }, agents: [] }),
+    watchDir: () => {}
+  })
+  await worker.refresh(true)
+  const html = orca.shown()
+  assert.ok(html.indexOf('UI') < html.indexOf('Restyle') && html.indexOf('Restyle') < html.indexOf('Tests') && html.indexOf('Tests') < html.indexOf('Cover the model'), html)
+
+  panes[SESSION_B] = undefined
+  await worker.refresh(true)
+  assert.ok(!orca.shown().includes('Cover the model'), 'not shown until its pane is read')
+})
