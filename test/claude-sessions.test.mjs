@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import {
   claudePaths,
+  createPaneReader,
   createSessionsOf,
   findListTranscript,
   findTranscript,
@@ -161,12 +162,26 @@ test('createSessionsOf gives an agent the session in its own pane, never one in 
   await write(process.ppid, SESSION_B, '/work/app/pkg')
   const ids = (sessions) => sessions.map((entry) => entry.sessionId)
   const panes = { [process.pid]: 'tab:a', [process.ppid]: 'tab:b' }
-  const sessionsOf = createSessionsOf(home, { paneOf: async (pid) => panes[pid] ?? null })
+  const sessionsOf = createSessionsOf(home, { paneOf: async ({ pid }) => panes[pid] ?? null })
   assert.deepEqual(ids(await sessionsOf('/work/app', 'tab:a')), [SESSION_A])
   assert.deepEqual(ids(await sessionsOf('/work/app', 'tab:b')), [SESSION_B])
   assert.deepEqual(ids(await sessionsOf('/work/app', 'tab:c')), [], 'not the session of another pane')
   assert.deepEqual(ids(await sessionsOf('/work/other', 'tab:a')), [])
   // A session in no Orca pane, as one started outside Orca, goes by its folder.
-  const outside = createSessionsOf(home, { paneOf: async (pid) => (pid === process.pid ? 'tab:a' : null) })
+  const outside = createSessionsOf(home, { paneOf: async ({ pid }) => (pid === process.pid ? 'tab:a' : null) })
   assert.deepEqual(ids(await outside('/work/app', 'tab:c')), [SESSION_B])
+  // A pane that could not be read is no sign of a session outside Orca.
+  const unread = createSessionsOf(home, { paneOf: async () => undefined })
+  assert.deepEqual(ids(await unread('/work/app', 'tab:a')), [])
+})
+
+test('createPaneReader reads each session once, again for a later session on the same pid, and retries a failure', async () => {
+  const reads = []
+  const answers = [undefined, 'tab:a', 'tab:b']
+  const paneOf = createPaneReader(async (pid) => (reads.push(pid), answers.shift()))
+  assert.equal(await paneOf({ pid: 7, sessionId: SESSION_A }), undefined)
+  assert.equal(await paneOf({ pid: 7, sessionId: SESSION_A }), 'tab:a')
+  assert.equal(await paneOf({ pid: 7, sessionId: SESSION_A }), 'tab:a')
+  assert.equal(await paneOf({ pid: 7, sessionId: SESSION_B }), 'tab:b')
+  assert.equal(reads.length, 3)
 })

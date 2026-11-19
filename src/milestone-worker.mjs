@@ -142,7 +142,7 @@ export function createMilestoneWorker({
   /** The pane of the session that owns a list: the session named by it, or the lead of its team. */
   async function paneOfList(listId, running) {
     const owner = running.find((entry) => (isSessionId(listId) ? entry.sessionId === listId : entry.sessionId.startsWith(`${listId.slice('session-'.length)}-`)))
-    return owner ? paneOf(owner.pid) : null
+    return owner ? ((await paneOf(owner)) ?? null) : null
   }
 
   async function allSessions() {
@@ -166,7 +166,7 @@ export function createMilestoneWorker({
       if (!head?.cwd) continue
       sessions.push({ ...list, cwd: head.cwd, paneKey: await paneOfList(list.listId, runningSessions), ...(await goalOf(list.listId, head, tasks)) })
     }
-    for (const list of await readCodexProgress(progressRoot)) sessions.push({ ...list, paneKey: await paneOf(list.pid) })
+    sessions.push(...(await readCodexProgress(progressRoot)))
     return sessions.sort((a, b) => b.updatedAt - a.updatedAt)
   }
 

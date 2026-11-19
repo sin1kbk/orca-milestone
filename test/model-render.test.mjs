@@ -179,6 +179,10 @@ test('another workspace with several agents gets a row for each, with that agent
     ['テストを書く', 'Goal B', 1, 1]
   ])
   assert.ok(renderBody(buildModel(workspace, sessions, [agent('tab:a', 'UI を直す', 'working'), agent('tab:b', 'テストを書く', 'done')])).includes('<span class="title">UI を直す</span>'))
+  // Agents without a name still keep their own lists, not a newer one started outside Orca.
+  const outside = { listId: 'o', cwd: '/work/juiz', paneKey: null, goal: 'Outside', updatedAt: 3, tasks: [task(1, 'o', 'pending')] }
+  const unnamed = buildModel(workspace, [outside, ...sessions], [agent('tab:a', null, 'working'), agent('tab:b', null, 'done')])
+  assert.deepEqual(unnamed.others.rows.map((row) => [row.paneKey, row.goal]), [['tab:a', 'Goal A'], ['tab:b', 'Goal B']])
 })
 
 test('a session in the pane of a nested workspace agent is not shown under the outer workspace', () => {

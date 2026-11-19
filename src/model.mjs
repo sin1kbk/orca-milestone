@@ -48,7 +48,7 @@ function buildOthers(agents, sessions) {
     const split = (live.get(agent.path)?.length ?? 0) > 1
     if (split && !(agent.live && agent.paneKey)) continue
     const key = split ? `${agent.path}\n${agent.paneKey}` : agent.path
-    const entry = byWorkspace.get(key) ?? { ...agent, title: split ? agent.title : null, panes: new Set(), needsUser: false, working: false, background: false, since: 0 }
+    const entry = byWorkspace.get(key) ?? { ...agent, split, title: split ? agent.title : null, panes: new Set(), needsUser: false, working: false, background: false, since: 0 }
     if (agent.paneKey) entry.panes.add(agent.paneKey)
     if (NEEDS_USER.has(agent.state)) {
       entry.needsUser = true
@@ -59,14 +59,14 @@ function buildOthers(agents, sessions) {
     byWorkspace.set(key, entry)
   }
   const rows = [...byWorkspace.values()].map((entry) => {
-    const session = entry.title !== null
+    const session = entry.split
       ? sessions.find((s) => s.tasks.length > 0 && s.paneKey === entry.paneKey)
       : sessions.find((s) => s.tasks.length > 0 && belongsTo(s, entry.path, entry.panes, knownPanes))
     const counts = session ? progress(session.tasks) : { done: 0, total: 0, tasks: [] }
     return {
       workspace: entry.workspace,
       path: entry.path,
-      paneKey: entry.title !== null ? entry.paneKey : null,
+      paneKey: entry.split ? entry.paneKey : null,
       title: entry.title,
       repo: entry.repo ?? null,
       focused: entry.focused,

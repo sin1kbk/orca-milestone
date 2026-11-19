@@ -8,7 +8,7 @@ import { readCodexProgress } from '../src/codex-progress.mjs'
 import { TOOL_NAME, handleMessage, progressDir } from '../src/progress-server.mjs'
 
 async function context() {
-  return { dir: await mkdtemp(join(tmpdir(), 'progress-')), pid: 4242, cwd: '/work/app', now: () => 1000 }
+  return { dir: await mkdtemp(join(tmpdir(), 'progress-')), pid: 4242, cwd: '/work/app', paneKey: 'tab:codex', now: () => 1000 }
 }
 
 const call = (args, id = 2) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: TOOL_NAME, arguments: args } })
@@ -35,7 +35,7 @@ test('a recorded plan is read back as a list while its session runs', async () =
   assert.deepEqual(lists, [
     {
       listId: 'codex-4242',
-      pid: 4242,
+      paneKey: 'tab:codex',
       cwd: '/work/app',
       goal: 'Ship',
       updatedAt: 1000,

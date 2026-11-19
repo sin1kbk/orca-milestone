@@ -438,35 +438,47 @@ export function pendingCall(text) {
   return part ? { toolUseId: part.id, name: part.name, input: part.input ?? {}, ...(part.cwd ? { cwd: part.cwd } : {}) } : null
 }
 
-/** The Orca pane a process runs in, from the ORCA_PANE_KEY Orca gives its terminals, or null. */
+/**
+ * The Orca pane a process runs in, from the ORCA_PANE_KEY Orca gives its terminals: null when it has
+ * none, as one started outside Orca, and undefined when the process could not be read.
+ */
 export function readPaneKey(pid) {
   return new Promise((resolve) => {
     // Only this one variable is taken from the environment; nothing else of it is kept.
     execFile('ps', ['eww', '-o', 'command=', '-p', String(pid)], { maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
-      resolve(error ? null : (/(?:^|\s)ORCA_PANE_KEY=([^\s]+)/.exec(stdout)?.[1] ?? null))
+      resolve(error ? undefined : (/(?:^|\s)ORCA_PANE_KEY=([^\s]+)/.exec(stdout)?.[1] ?? null))
     })
   })
 }
 
-/** The pane of a process. A process keeps its environment, so each pid is read once. */
+/**
+ * The pane of a running session. A process keeps its environment, so each is read once; the key
+ * holds the session id too, since a pid is used again by a later process. A failed read is retried.
+ */
 export function createPaneReader(read = readPaneKey) {
   const known = new Map()
-  return async function paneOf(pid) {
-    if (!known.has(pid)) known.set(pid, await read(pid))
-    return known.get(pid)
+  return async function paneOf({ pid, sessionId }) {
+    const key = `${pid}\n${sessionId}`
+    if (!known.has(key)) {
+      const pane = await read(pid)
+      if (pane === undefined) return undefined
+      known.set(key, pane)
+    }
+    return known.get(key)
   }
 }
 
 /**
  * Resolves a workspace path and an agent's pane to the running Claude sessions of that agent: the one
  * in its pane, else those in the folder that run in no Orca pane, as one started outside Orca. A
- * session in another agent's pane is never taken, so two Claude agents in one workspace stay apart.
+ * session in another agent's pane, or one whose pane could not be read, is never taken, so two
+ * Claude agents in one workspace stay apart.
  */
 export function createSessionsOf(home, { paneOf = createPaneReader() } = {}) {
   const { sessionsRoot } = claudePaths(home)
   return async function sessionsOf(path, paneKey) {
     const inside = (await readRunningSessions(sessionsRoot)).filter((entry) => entry.cwd !== null && (entry.cwd === path || entry.cwd.startsWith(`${path}/`)))
-    const panes = await Promise.all(inside.map((entry) => paneOf(entry.pid)))
+    const panes = await Promise.all(inside.map((entry) => paneOf(entry)))
     const own = inside.filter((_, index) => paneKey && panes[index] === paneKey)
     return own.length > 0 ? own : inside.filter((_, index) => panes[index] === null)
   }
