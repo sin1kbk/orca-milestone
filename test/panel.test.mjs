@@ -54,6 +54,28 @@ test('patchChildren replaces an element whose data-key differs, and keeps one wh
   assert.equal(root.children[0].textContent, '0 / 5')
 })
 
+test('patchChildren matches keyed children by key, so one going away or moving keeps the others', () => {
+  const pane = (key, text) => `<div class="pane" data-key="${key}"><p>${text}</p></div>`
+  const root = body(pane('a', 'A') + pane('b', 'B') + pane('c', 'C'))
+  const [, b, c] = root.children
+  const status = root.ownerDocument.createElement('span')
+  b.appendChild(status)
+
+  patchChildren(root, pane('b', 'B2') + pane('c', 'C'))
+  assert.equal(root.children[0], b, 'the first going away leaves the next in place')
+  assert.equal(root.children[1], c)
+  assert.equal(b.textContent, 'B2')
+  assert.ok(!b.contains(status), 'what the worker did not render is still dropped')
+
+  patchChildren(root, pane('c', 'C') + '<p>loose</p>' + pane('b', 'B2'))
+  assert.equal(root.children[0], c, 'a move keeps the element')
+  assert.equal(root.children[2], b)
+  assert.equal(root.innerHTML, pane('c', 'C') + '<p>loose</p>' + pane('b', 'B2'))
+
+  patchChildren(root, '<p>loose</p>' + pane('b', 'B2'))
+  assert.equal(root.children[1], b, 'an unkeyed node does not take the place of a keyed one')
+})
+
 test('patchChildren ends with exactly the wanted markup, from an empty panel too', () => {
   const root = body()
   const html = '<main><header><h1>app</h1></header></main><div class="others"><h2>x</h2></div>'
