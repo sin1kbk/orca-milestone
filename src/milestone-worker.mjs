@@ -9,13 +9,16 @@ import {
   findListTranscript,
   currentGoal,
   isListRunning,
-  readRunningSessionIds,
   readTasksFromTranscript,
   listRecentTaskLists,
   readPromptBeforeTask,
   readTaskList,
   readTranscriptHead,
+  createPaneReader,
   createPendingReader,
+  createSessionsOf,
+  isSessionId,
+  readRunningSessions,
   pendingCall,
   turnEnded,
   pendingQuestion
@@ -42,6 +45,7 @@ export function createMilestoneWorker({
   cli,
   readOrca = readWorkspaces,
   runCli = runOrca,
+  paneOf = createPaneReader(),
   now = Date.now,
   watchDir = (dir, onChange) => watch(dir, { recursive: true }, onChange)
 }) {
@@ -63,13 +67,15 @@ export function createMilestoneWorker({
   const runArgs = (args, timeout) => runCli(cli, args, timeout)
   // A question or a call waiting for permission is read from the transcript of Claude's session,
   // a Codex menu from the screen of its pane.
-  const readLaunchInfo = createLaunchInfoReader(home)
+  // Each agent's own session, by the Orca pane its process runs in.
+  const sessionsOf = createSessionsOf(home, { paneOf })
+  const readLaunchInfo = createLaunchInfoReader(home, { sessionsOf })
   const grants = createGrantAccess(home)
   const readers = {
-    readQuestion: createPendingReader(home, pendingQuestion),
-    readCall: createPendingReader(home, pendingCall),
+    readQuestion: createPendingReader(home, pendingQuestion, sessionsOf),
+    readCall: createPendingReader(home, pendingCall, sessionsOf),
     // Orca calls an agent working while its background shells run, even after its turn.
-    readTurnEnded: createPendingReader(home, turnEnded),
+    readTurnEnded: createPendingReader(home, turnEnded, sessionsOf),
     readPane: (paneKey) => readPaneScreen(runArgs, paneKey),
     // A Claude session started with older instructions than the launch hook gives now.
     readLaunch: createLaunchReader(home, { readLaunchInfo }),
@@ -133,8 +139,15 @@ export function createMilestoneWorker({
     if (isFinished(tasks)) lastTasks.set(list.listId, tasks)
   }
 
+  /** The pane of the session that owns a list: the session named by it, or the lead of its team. */
+  async function paneOfList(listId, running) {
+    const owner = running.find((entry) => (isSessionId(listId) ? entry.sessionId === listId : entry.sessionId.startsWith(`${listId.slice('session-'.length)}-`)))
+    return owner ? paneOf(owner.pid) : null
+  }
+
   async function allSessions() {
-    const running = await readRunningSessionIds(paths.sessionsRoot)
+    const runningSessions = await readRunningSessions(paths.sessionsRoot)
+    const running = new Set(runningSessions.map((entry) => entry.sessionId))
     const lists = await listRecentTaskLists(tasksRoot, { maxAgeMs: TASK_LIST_MAX_AGE_MS })
     const sessions = []
     for (const list of lists) {
@@ -151,9 +164,9 @@ export function createMilestoneWorker({
       if (tasks.length === 0) continue
       const head = await headOf(list.listId)
       if (!head?.cwd) continue
-      sessions.push({ ...list, cwd: head.cwd, ...(await goalOf(list.listId, head, tasks)) })
+      sessions.push({ ...list, cwd: head.cwd, paneKey: await paneOfList(list.listId, runningSessions), ...(await goalOf(list.listId, head, tasks)) })
     }
-    sessions.push(...(await readCodexProgress(progressRoot)))
+    for (const list of await readCodexProgress(progressRoot)) sessions.push({ ...list, paneKey: await paneOf(list.pid) })
     return sessions.sort((a, b) => b.updatedAt - a.updatedAt)
   }
 

@@ -47,16 +47,18 @@ test('the input box is read from the screen, and its gray suggestion counts as e
 })
 
 const reply = 'できました\n```next\n[{"label":"A","prompt":"do a"}]\n```'
+// The offer of the workspace's only agent.
+const offerOf = (worktree, launch) => nextOffer(worktree, worktree.agents[0], launch)
 const claude = (extra = {}) => ({ agentType: 'claude', state: 'done', paneKey: 'tab:leaf', hasLivePty: true, stateStartedAt: 5, lastAssistantMessage: reply, ...extra })
 
 test('a waiting session told something older gets a restart card after its proposals, on screen only', async () => {
   const launch = { sessionId: SESSION, pid: 1, args: OLD_ARGS }
-  const offer = nextOffer({ path: '/w', agents: [claude()] }, launch)
+  const offer = offerOf({ path: '/w', agents: [claude()] }, launch)
   assert.deepEqual(offer.suggestions.map((s) => [s.label, s.action]), [['A', undefined], ['最新の指示で再開', 'restart']])
   assert.equal(offer.sessionId, SESSION)
-  assert.notEqual(offer.id, nextOffer({ path: '/w', agents: [claude()] }).id)
-  assert.deepEqual(nextOffer({ path: '/w', agents: [claude({ lastAssistantMessage: 'hi' })] }, launch).suggestions.map((s) => s.action), ['restart'])
-  assert.equal(nextOffer({ path: '/w', agents: [claude({ lastAssistantMessage: 'hi', background: true })] }, launch), null, 'not with shells in the background')
+  assert.notEqual(offer.id, offerOf({ path: '/w', agents: [claude()] }).id)
+  assert.deepEqual(offerOf({ path: '/w', agents: [claude({ lastAssistantMessage: 'hi' })] }, launch).suggestions.map((s) => s.action), ['restart'])
+  assert.equal(offerOf({ path: '/w', agents: [claude({ lastAssistantMessage: 'hi', background: true })] }, launch), null, 'not with shells in the background')
   const readLaunch = async () => launch
   const shown = async (worktree) => (await offersOf([worktree], { readLaunch }))[0]?.suggestions.map((s) => s.label)
   assert.deepEqual(await shown({ path: '/w', isActive: true, agents: [claude()] }), ['A', '最新の指示で再開'])
@@ -123,7 +125,7 @@ test('a session that does not exit is left as it was, and one that does not come
 })
 
 test('the sender hands a restart card to the restarter once, and lets it be pressed again after a refusal', async () => {
-  const offer = nextOffer({ path: '/w', agents: [claude()] }, { sessionId: SESSION })
+  const offer = offerOf({ path: '/w', agents: [claude()] }, { sessionId: SESSION })
   const answers = [{ sent: false, reason: 'draft' }, { sent: true }]
   const pressed = []
   const send = createNextSender({

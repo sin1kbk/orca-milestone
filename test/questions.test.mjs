@@ -223,6 +223,15 @@ test('allowing a dangerous command takes a second press, which sends it confirme
   assert.deepEqual(requests, [{ offer: 'o1', index: 0, confirmed: true }])
 })
 
+test('two Claude agents in one workspace settle apart, each by its own session', async () => {
+  const { readWorkspaces } = await import('../src/orca-cli.mjs')
+  const busy = { agentType: 'claude', state: 'working', paneKey: 'tab:a', hasLivePty: true, stateStartedAt: 7, activity: { title: 'UI を直す' } }
+  const worktrees = [{ path: '/a', displayName: 'a', isActive: true, agents: [busy, { ...busy, paneKey: 'tab:b', activity: undefined, conversationName: 'テストを書く' }] }]
+  const run = async () => ({ ok: true, result: { worktrees } })
+  const read = await readWorkspaces('orca', run, { readTurnEnded: async (path, paneKey) => paneKey === 'tab:b' })
+  assert.deepEqual(read.active.agents.map((agent) => [agent.paneKey, agent.title, agent.state]), [['tab:a', 'UI を直す', 'working'], ['tab:b', 'テストを書く', 'done']])
+})
+
 test('a Claude agent Orca calls working but whose turn is over waits, with its proposals', async () => {
   const { readWorkspaces } = await import('../src/orca-cli.mjs')
   const { turnEnded } = await import('../src/claude-sessions.mjs')

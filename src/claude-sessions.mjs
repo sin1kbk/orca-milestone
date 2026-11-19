@@ -4,6 +4,7 @@
 // A plain session names its list by its session id. A session that leads an agent team
 // (`claude --teammate-mode`, which Orca's Agent Teams launch uses) names it after the team,
 // `session-<first 8 hex of the session id>`.
+import { execFile } from 'node:child_process'
 import { createReadStream } from 'node:fs'
 import { open, readdir, readFile, stat } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
@@ -42,28 +43,6 @@ function isRunning(pid) {
     // EPERM: the process exists but belongs to someone else.
     return error.code === 'EPERM'
   }
-}
-
-/**
- * Ids of the Claude sessions running now. Each running session keeps
- * ~/.claude/sessions/<pid>.json, removed when it exits; the pid is checked in case it crashed.
- */
-export async function readRunningSessionIds(sessionsRoot) {
-  let names
-  try {
-    names = await readdir(sessionsRoot)
-  } catch {
-    return new Set()
-  }
-  const ids = new Set()
-  for (const name of names) {
-    if (!/^\d+\.json$/.test(name)) continue
-    const entry = await readJson(join(sessionsRoot, name))
-    if (entry && isSessionId(entry.sessionId) && Number.isInteger(entry.pid) && isRunning(entry.pid)) {
-      ids.add(entry.sessionId)
-    }
-  }
-  return ids
 }
 
 /** Whether the session that owns a task list (by its id, or a team's id prefix) is running. */
@@ -365,7 +344,10 @@ export async function readTranscriptHead(path) {
   return head
 }
 
-/** The running Claude sessions with the folder each works in. */
+/**
+ * The running Claude sessions with the folder each works in, null when not recorded. Each running
+ * session keeps ~/.claude/sessions/<pid>.json, removed when it exits; the pid is checked in case it crashed.
+ */
 export async function readRunningSessions(sessionsRoot) {
   let names
   try {
@@ -377,8 +359,8 @@ export async function readRunningSessions(sessionsRoot) {
   for (const name of names) {
     if (!/^\d+\.json$/.test(name)) continue
     const entry = await readJson(join(sessionsRoot, name))
-    if (entry && isSessionId(entry.sessionId) && Number.isInteger(entry.pid) && isRunning(entry.pid) && typeof entry.cwd === 'string') {
-      sessions.push({ sessionId: entry.sessionId, cwd: entry.cwd, pid: entry.pid })
+    if (entry && isSessionId(entry.sessionId) && Number.isInteger(entry.pid) && isRunning(entry.pid)) {
+      sessions.push({ sessionId: entry.sessionId, cwd: typeof entry.cwd === 'string' ? entry.cwd : null, pid: entry.pid })
     }
   }
   return sessions
@@ -456,17 +438,50 @@ export function pendingCall(text) {
   return part ? { toolUseId: part.id, name: part.name, input: part.input ?? {}, ...(part.cwd ? { cwd: part.cwd } : {}) } : null
 }
 
+/** The Orca pane a process runs in, from the ORCA_PANE_KEY Orca gives its terminals, or null. */
+export function readPaneKey(pid) {
+  return new Promise((resolve) => {
+    // Only this one variable is taken from the environment; nothing else of it is kept.
+    execFile('ps', ['eww', '-o', 'command=', '-p', String(pid)], { maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => {
+      resolve(error ? null : (/(?:^|\s)ORCA_PANE_KEY=([^\s]+)/.exec(stdout)?.[1] ?? null))
+    })
+  })
+}
+
+/** The pane of a process. A process keeps its environment, so each pid is read once. */
+export function createPaneReader(read = readPaneKey) {
+  const known = new Map()
+  return async function paneOf(pid) {
+    if (!known.has(pid)) known.set(pid, await read(pid))
+    return known.get(pid)
+  }
+}
+
 /**
- * Reads, for a workspace path, what `pick` finds in the transcript of the Claude session running
- * there. Null when none or more than one session there has one: another Claude in the same folder,
- * started outside Orca, could be the one asking.
+ * Resolves a workspace path and an agent's pane to the running Claude sessions of that agent: the one
+ * in its pane, else those in the folder that run in no Orca pane, as one started outside Orca. A
+ * session in another agent's pane is never taken, so two Claude agents in one workspace stay apart.
  */
-export function createPendingReader(home, pick) {
-  const { projectsRoot, sessionsRoot } = claudePaths(home)
-  return async function readPending(path) {
-    const inside = (await readRunningSessions(sessionsRoot)).filter((entry) => entry.cwd === path || entry.cwd.startsWith(`${path}/`))
+export function createSessionsOf(home, { paneOf = createPaneReader() } = {}) {
+  const { sessionsRoot } = claudePaths(home)
+  return async function sessionsOf(path, paneKey) {
+    const inside = (await readRunningSessions(sessionsRoot)).filter((entry) => entry.cwd !== null && (entry.cwd === path || entry.cwd.startsWith(`${path}/`)))
+    const panes = await Promise.all(inside.map((entry) => paneOf(entry.pid)))
+    const own = inside.filter((_, index) => paneKey && panes[index] === paneKey)
+    return own.length > 0 ? own : inside.filter((_, index) => panes[index] === null)
+  }
+}
+
+/**
+ * Reads, for a workspace path and an agent's pane, what `pick` finds in the transcript of that
+ * agent's Claude session. Null when none or more than one session has one: another Claude in the
+ * same folder, started outside Orca, could be the one asking.
+ */
+export function createPendingReader(home, pick, sessionsOf = createSessionsOf(home)) {
+  const { projectsRoot } = claudePaths(home)
+  return async function readPending(path, paneKey) {
     const pending = []
-    for (const { sessionId } of inside) {
+    for (const { sessionId } of await sessionsOf(path, paneKey)) {
       const transcript = await findTranscript(projectsRoot, sessionId)
       const found = transcript ? pick(await readTail(transcript).catch(() => '')) : null
       if (found) pending.push(found)

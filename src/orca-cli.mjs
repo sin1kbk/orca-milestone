@@ -81,25 +81,46 @@ function mainAgentDone(agent) {
  * done, and `background`: shells it started go on running, and it waits for the user. Its proposals
  * then show as for any agent that finished. Its `stateStartedAt` becomes the end of the turn: Orca's
  * stays where the shells began, and the cards of every later turn would get the ids of the first.
- * @param readTurnEnded resolves a workspace path to when its Claude session ended its turn (true when
+ * @param readTurnEnded resolves a workspace path and an agent's pane to when its Claude session ended its turn (true when
  *   the time is unknown), or null
  */
 export async function settleAgents(worktrees, readTurnEnded) {
   const settled = []
   for (const worktree of worktrees) {
-    const working = mainAgents(worktree).filter((agent) => agent.agentType === 'claude' && agent.state === 'working' && agent.hasLivePty === true)
-    const ended = working.length !== 1 ? null : (mainAgentDone(working[0]) ?? (await readTurnEnded(worktree.path).catch(() => null)))
-    if (!ended) {
+    const ends = new Map()
+    for (const agent of liveAgents(worktree)) {
+      if (agent.agentType !== 'claude' || agent.state !== 'working') continue
+      const ended = mainAgentDone(agent) ?? (await readTurnEnded(worktree.path, agent.paneKey).catch(() => null))
+      if (ended) ends.set(agent, ended)
+    }
+    if (ends.size === 0) {
       settled.push(worktree)
       continue
     }
-    settled.push({ ...worktree, agents: worktree.agents.map((agent) => (agent === working[0] ? { ...agent, state: 'done', background: true, ...(typeof ended === 'number' ? { stateStartedAt: ended } : {}) } : agent)) })
+    settled.push({
+      ...worktree,
+      agents: worktree.agents.map((agent) => {
+        const ended = ends.get(agent)
+        return ended ? { ...agent, state: 'done', background: true, ...(typeof ended === 'number' ? { stateStartedAt: ended } : {}) } : agent
+      })
+    })
   }
   return settled
 }
 
+/** The main agents whose pane is still open. Orca keeps the record of a closed pane, without hasLivePty. */
+export function liveAgents(worktree) {
+  return mainAgents(worktree).filter((agent) => agent.hasLivePty === true)
+}
+
+/** What names one agent among several in a workspace: the name Orca shows for its conversation. */
+function agentTitle(agent) {
+  const title = [agent.activity?.title, agent.conversationName, agent.taskTitle, agent.displayName, agent.prompt].find((value) => typeof value === 'string' && value.trim())
+  return title ? title.trim() : null
+}
+
 /**
- * The focused workspace ({ path, displayName, agentStates, background }, or null), the main agents of every
+ * The focused workspace ({ path, displayName, agentStates, background, agents }, or null), the main agents of every
  * workspace that is not archived, and what each agent offers to choose from: its proposed next
  * steps, its question or the tool waiting for permission. Of the prompts and replies, only the
  * block an agent wrote for those buttons is kept.
@@ -122,7 +143,8 @@ export async function readWorkspaces(cli, run = runOrca, readers = {}) {
           path: active.path,
           displayName: active.displayName,
           agentStates: mainAgents(active).map((agent) => agent.state),
-          background: mainAgents(active).some((agent) => agent.background === true)
+          background: mainAgents(active).some((agent) => agent.background === true),
+          agents: liveAgents(active).map((agent) => ({ paneKey: agent.paneKey, title: agentTitle(agent), state: agent.state, background: agent.background === true }))
         }
       : null,
     agents: worktrees.flatMap((worktree) =>
@@ -131,6 +153,9 @@ export async function readWorkspaces(cli, run = runOrca, readers = {}) {
         repo: typeof worktree.repo === 'string' ? worktree.repo : null,
         path: worktree.path,
         focused: Boolean(worktree.isActive),
+        paneKey: agent.paneKey ?? null,
+        title: agentTitle(agent),
+        live: agent.hasLivePty === true,
         state: agent.state,
         background: agent.background === true,
         since: agent.stateStartedAt ?? null

@@ -6,7 +6,7 @@
 import { execFile } from 'node:child_process'
 import { open } from 'node:fs/promises'
 import { join } from 'node:path'
-import { claudePaths, readRunningSessions } from './claude-sessions.mjs'
+import { claudePaths, createSessionsOf, readRunningSessions } from './claude-sessions.mjs'
 import { launchSignature, withTaskInstructions } from './launch-hook.mjs'
 
 const TAIL_BYTES = 256 * 1024
@@ -45,15 +45,14 @@ export function isStale(args, signature = launchSignature()) {
 }
 
 /**
- * The one running Claude session in a workspace with its command line, or null.
+ * The one running Claude session of an agent, by workspace path and pane, with its command line, or null.
  * @returns { sessionId, pid, args }
  */
-export function createLaunchInfoReader(home, { readArgsOf = readArgs } = {}) {
-  const { sessionsRoot } = claudePaths(home)
+export function createLaunchInfoReader(home, { readArgsOf = readArgs, sessionsOf = createSessionsOf(home) } = {}) {
   // A process keeps its command line, so it is read once.
   const known = new Map()
-  return async function readLaunchInfo(path) {
-    const inside = (await readRunningSessions(sessionsRoot)).filter((entry) => entry.cwd === path || entry.cwd.startsWith(`${path}/`))
+  return async function readLaunchInfo(path, paneKey) {
+    const inside = await sessionsOf(path, paneKey)
     if (inside.length !== 1) return null
     const [{ sessionId, pid }] = inside
     if (!known.has(pid)) known.set(pid, await readArgsOf(pid))
@@ -62,10 +61,10 @@ export function createLaunchInfoReader(home, { readArgsOf = readArgs } = {}) {
   }
 }
 
-/** The one running Claude session in a workspace when it was told something older, or null. */
+/** The one running Claude session of an agent when it was told something older, or null. */
 export function createLaunchReader(home, { readArgsOf = readArgs, readLaunchInfo = createLaunchInfoReader(home, { readArgsOf }) } = {}) {
-  return async function readLaunch(path) {
-    const info = await readLaunchInfo(path)
+  return async function readLaunch(path, paneKey) {
+    const info = await readLaunchInfo(path, paneKey)
     return info && isStale(info.args) ? info : null
   }
 }
@@ -144,7 +143,7 @@ function isRunning(pid) {
 
 /**
  * @param run        runs the Orca CLI with arguments and resolves to its JSON reply
- * @param readLaunch resolves a workspace path to its session told something older, see createLaunchReader
+ * @param readLaunch resolves a workspace path and a pane to its session told something older, see createLaunchReader
  * @param readScreen resolves a terminal handle to what it shows now
  * @returns a function that takes the offer and the terminal of its pane, and resolves to
  *   `{ sent: true }` once the session runs again, `{ sent: false, reason: 'stale' }` when there is
@@ -166,7 +165,7 @@ export function createRestarter({ home, run, readLaunch, readScreen, readOutput 
   }
 
   return async function restart(found, terminal) {
-    const launch = await readLaunch(found.path)
+    const launch = await readLaunch(found.path, found.paneKey)
     if (!launch || launch.sessionId !== found.sessionId) return { sent: false, reason: 'stale' }
     const typed = inputText(await readScreen(terminal.handle))
     if (typed === null) return { sent: false, reason: 'stale' }

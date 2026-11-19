@@ -142,3 +142,50 @@ test('an agent waiting while its shells run in the background says so, here and 
   assert.equal(model.others.rows[0].background, true)
   assert.ok(renderBody(model).includes('<span class="background">裏で実行中</span>'))
 })
+
+test('several agents in the focused workspace each show their own tasks and offer, under their own name', () => {
+  const agents = [
+    { paneKey: 'tab:a', title: 'UI を直す', state: 'working', background: false },
+    { paneKey: 'tab:b', title: 'テストを書く', state: 'done', background: false }
+  ]
+  const sessions = [
+    { listId: 'a', cwd: '/work/app', paneKey: 'tab:a', goal: 'Goal A', tasks: [task(1, 'x', 'in_progress')] },
+    { listId: 'b', cwd: '/work/app', paneKey: 'tab:b', goal: 'Goal B', tasks: [task(1, 'y', 'completed')] }
+  ]
+  const offer = { kind: 'proposal', id: 'o1', path: '/work/app', paneKey: 'tab:b', suggestions: [{ label: 'PR', prompt: 'p', reason: '' }] }
+  const model = buildModel({ ...workspace, agentStates: ['working', 'done'], agents }, sessions, [], [offer])
+  assert.equal(model.kind, 'agents')
+  assert.deepEqual(model.agents.map((a) => [a.title, a.agent, a.sessions.map((s) => s.listId), a.next?.id ?? null]), [
+    ['UI を直す', 'working', ['a'], null],
+    ['テストを書く', 'idle', ['b'], 'o1']
+  ])
+  const html = renderBody(model)
+  assert.ok(html.indexOf('UI を直す') < html.indexOf('Goal A') && html.indexOf('Goal A') < html.indexOf('テストを書く'))
+  assert.ok(html.indexOf('テストを書く') < html.indexOf('data-next="o1"'), 'the offer sits with its own agent')
+  // One agent keeps the plain layout.
+  assert.equal(buildModel({ ...workspace, agents: agents.slice(0, 1) }, sessions).kind, 'sessions')
+})
+
+test('another workspace with several agents gets a row for each, with that agent progress', () => {
+  const agent = (paneKey, title, state, extra = {}) => ({ workspace: 'juiz', repo: null, path: '/work/juiz', paneKey, title, live: true, focused: false, state, background: false, since: 1, ...extra })
+  const sessions = [
+    { listId: 'a', cwd: '/work/juiz', paneKey: 'tab:a', goal: 'Goal A', updatedAt: 2, tasks: [task(1, 'x', 'completed'), task(2, 'y', 'pending')] },
+    { listId: 'b', cwd: '/work/juiz', paneKey: 'tab:b', goal: 'Goal B', updatedAt: 1, tasks: [task(1, 'z', 'completed')] }
+  ]
+  const closed = agent('tab:old', 'old', 'waiting', { live: false })
+  const { others } = buildModel(workspace, sessions, [agent('tab:a', 'UI を直す', 'working'), agent('tab:b', 'テストを書く', 'done'), closed])
+  assert.deepEqual(others.rows.map((row) => [row.title, row.goal, row.done, row.total]), [
+    ['UI を直す', 'Goal A', 1, 2],
+    ['テストを書く', 'Goal B', 1, 1]
+  ])
+  assert.ok(renderBody(buildModel(workspace, sessions, [agent('tab:a', 'UI を直す', 'working'), agent('tab:b', 'テストを書く', 'done')])).includes('<span class="title">UI を直す</span>'))
+})
+
+test('a session in the pane of a nested workspace agent is not shown under the outer workspace', () => {
+  const agent = (path, paneKey) => ({ workspace: path, repo: null, path, paneKey, title: null, live: true, focused: false, state: 'working', background: false, since: 1 })
+  const sessions = [{ listId: 'n', cwd: '/work/app/.claude/worktrees/x', paneKey: 'tab:x', goal: 'Nested', updatedAt: 1, tasks: [task(1, 'x', 'pending')] }]
+  const model = buildModel({ ...workspace, agents: [{ paneKey: 'tab:app' }] }, sessions, [agent('/work/app', 'tab:app'), agent('/work/app/.claude/worktrees/x', 'tab:x')])
+  assert.equal(model.kind, 'no-tasks')
+  assert.equal(model.others.rows.length, 1)
+  assert.equal(model.others.rows[0].path, '/work/app/.claude/worktrees/x')
+})

@@ -93,15 +93,14 @@ export function parseSuggestions(message) {
 }
 
 /**
- * The one live main agent of a workspace, or null. With two, a card could reach another agent
- * than the one shown. Orca keeps the record of a pane that has closed, without hasLivePty.
+ * The live main agents of a workspace, each with offers of its own: a card names the pane it goes to.
+ * Orca keeps the record of a pane that has closed, without hasLivePty.
  */
-function soleAgent(worktree) {
-  if (worktree.isArchived) return null
-  const agents = (worktree.agents ?? []).filter(
+function liveAgents(worktree) {
+  if (worktree.isArchived) return []
+  return (worktree.agents ?? []).filter(
     (agent) => TRACKED_AGENTS.has(agent.agentType) && !agent.parentPaneKey && agent.hasLivePty === true
   )
-  return agents.length === 1 ? agents[0] : null
 }
 
 /** Changes with every turn and every call, so a card shown for an earlier one matches nothing. */
@@ -116,12 +115,11 @@ function base(kind, worktree, agent, extra) {
 const RESTART_CARD = { label: '最新の指示で再開', action: 'restart', detail: '同じ会話のまま、いまの plugin の指示で起動し直します' }
 
 /**
- * What a workspace's agent proposes now: only one that finished its turn. A Claude session told
- * something older gets one more card, to start it again under what the plugin says now.
+ * What an agent proposes now: only one that finished its turn. A Claude session told something
+ * older gets one more card, to start it again under what the plugin says now.
  * @param launch { sessionId } of that session, or null
  */
-export function nextOffer(worktree, launch = null) {
-  const agent = soleAgent(worktree)
+export function nextOffer(worktree, agent, launch = null) {
   if (agent?.state !== 'done') return null
   const suggestions = parseSuggestions(agent.lastAssistantMessage)
   const restart = launch && agent.agentType === 'claude' && !agent.background
@@ -131,10 +129,9 @@ export function nextOffer(worktree, launch = null) {
 }
 
 /** Only for the workspace on screen, the one whose cards show, and only while Claude waits idle. */
-async function launchOf(worktree, readLaunch) {
-  const agent = soleAgent(worktree)
-  if (!worktree.isActive || agent?.agentType !== 'claude' || agent.state !== 'done' || agent.background) return null
-  return readLaunch(worktree.path).catch(() => null)
+async function launchOf(worktree, agent, readLaunch) {
+  if (!worktree.isActive || agent.agentType !== 'claude' || agent.state !== 'done' || agent.background) return null
+  return readLaunch(worktree.path, agent.paneKey).catch(() => null)
 }
 
 /**
@@ -197,10 +194,9 @@ export function answerKeys(questions, answers) {
   return keys
 }
 
-async function questionOffer(worktree, readQuestion) {
-  const agent = soleAgent(worktree)
-  if (agent?.agentType !== 'claude' || agent.state !== 'waiting' || agent.toolName !== 'AskUserQuestion') return null
-  const asked = await readQuestion(worktree.path).catch(() => null)
+async function questionOffer(worktree, agent, readQuestion) {
+  if (agent.agentType !== 'claude' || agent.state !== 'waiting' || agent.toolName !== 'AskUserQuestion') return null
+  const asked = await readQuestion(worktree.path, agent.paneKey).catch(() => null)
   const buttons = questionButtons(asked)
   if (buttons) return { ...base('question', worktree, agent, asked.toolUseId), ...buttons }
   const questions = questionForm(asked)
@@ -236,7 +232,7 @@ function permissionCards(stop) {
  * menu is on the screen.
  */
 async function claudeCall(worktree, agent, readCall, readPane) {
-  const call = await readCall(worktree.path).catch(() => null)
+  const call = await readCall(worktree.path, agent.paneKey).catch(() => null)
   if (call) return call.name === agent.toolName ? call : null
   if (agent.toolName !== 'Bash' || typeof agent.toolInput !== 'string' || !agent.toolInput.trim()) return null
   const fromOrca = { toolUseId: agent.toolInput, name: 'Bash', input: { command: agent.toolInput } }
@@ -250,14 +246,13 @@ const REST_CARD = { label: 'このターンの残りも許可', action: 'allow-r
  * A session started with the PermissionRequest hook can allow the rest of its turn (turn-grant.mjs):
  * one more card, never for a dangerous command, since the grant would not cover the next one either.
  */
-async function permissionOffer(worktree, readCall, readPane, readLaunchInfo) {
-  const agent = soleAgent(worktree)
-  if (agent?.agentType !== 'claude' || !PERMISSION_STATES.includes(agent.state) || !agent.toolName || agent.toolName === 'AskUserQuestion') return null
+async function permissionOffer(worktree, agent, readCall, readPane, readLaunchInfo) {
+  if (agent.agentType !== 'claude' || !PERMISSION_STATES.includes(agent.state) || !agent.toolName || agent.toolName === 'AskUserQuestion') return null
   const call = await claudeCall(worktree, agent, readCall, readPane)
   if (!call) return null
   const { summary, menuHint } = describeCall(call)
   const dangerous = isDangerous(call)
-  const info = dangerous ? null : await readLaunchInfo(worktree.path).catch(() => null)
+  const info = dangerous ? null : await readLaunchInfo(worktree.path, agent.paneKey).catch(() => null)
   const rest = info && hasGrantHook(info.args)
   return {
     ...base('permission', worktree, agent, call.toolUseId),
@@ -300,9 +295,8 @@ function describeCodexCall(worktree, agent, shown) {
   return { what: 'Bash', ...describeCall(call), risk: riskOf(call), where: whereOf(call, worktree.path), dangerous: isDangerous(call) }
 }
 
-async function codexPermissionOffer(worktree, readPane) {
-  const agent = soleAgent(worktree)
-  if (agent?.agentType !== 'codex' || !PERMISSION_STATES.includes(agent.state) || !agent.toolName) return null
+async function codexPermissionOffer(worktree, agent, readPane) {
+  if (agent.agentType !== 'codex' || !PERMISSION_STATES.includes(agent.state) || !agent.toolName) return null
   // Orca keeps the last toolName after the call, and other prompts also read as waiting. The menu cannot.
   const shown = await readPane(agent.paneKey).catch(() => null)
   const call = shown ? describeCodexCall(worktree, agent, shown) : null
@@ -319,32 +313,35 @@ async function codexPermissionOffer(worktree, readPane) {
 }
 
 /**
- * What every workspace's agent offers now.
- * @param readQuestion resolves a workspace path to its Claude session's pending AskUserQuestion
- * @param readCall     resolves a workspace path to its Claude session's pending tool call
+ * What every agent of every workspace offers now. The readers of a Claude session take the workspace
+ * path and the agent's pane, so that each of several agents in one workspace reads its own session.
+ * @param readQuestion resolves to the Claude session's pending AskUserQuestion
+ * @param readCall     resolves to the Claude session's pending tool call
  * @param readPane     resolves a pane key to what its terminal shows now
- * @param readLaunch   resolves a workspace path to its Claude session told something older, see restart.mjs
- * @param readLaunchInfo resolves a workspace path to its Claude session and command line, see restart.mjs
+ * @param readLaunch   resolves to the Claude session told something older, see restart.mjs
+ * @param readLaunchInfo resolves to the Claude session and its command line, see restart.mjs
  * @param readAllowed  resolves a session id to what the rest of its turn allowed, see turn-grant.mjs
  */
 export async function offersOf(worktrees, { readQuestion = async () => null, readCall = async () => null, readPane = async () => null, readLaunch = async () => null, readLaunchInfo = async () => null, readAllowed = async () => [] } = {}) {
   const offers = []
   for (const worktree of worktrees) {
-    const offer =
-      nextOffer(worktree, await launchOf(worktree, readLaunch)) ??
-      (await questionOffer(worktree, readQuestion)) ??
-      (await permissionOffer(worktree, readCall, readPane, readLaunchInfo)) ??
-      (await codexPermissionOffer(worktree, readPane))
-    if (!offer) continue
-    // What the rest of this turn allowed unread, listed for the workspace on screen.
-    const allowed = worktree.isActive && offer.agent === 'claude' ? await allowedOf(worktree, readLaunchInfo, readAllowed) : []
-    offers.push(allowed.length > 0 ? { ...offer, allowed } : offer)
+    for (const agent of liveAgents(worktree)) {
+      const offer =
+        nextOffer(worktree, agent, await launchOf(worktree, agent, readLaunch)) ??
+        (await questionOffer(worktree, agent, readQuestion)) ??
+        (await permissionOffer(worktree, agent, readCall, readPane, readLaunchInfo)) ??
+        (await codexPermissionOffer(worktree, agent, readPane))
+      if (!offer) continue
+      // What the rest of this turn allowed unread, listed for the workspace on screen.
+      const allowed = worktree.isActive && offer.agent === 'claude' ? await allowedOf(worktree, agent, readLaunchInfo, readAllowed) : []
+      offers.push(allowed.length > 0 ? { ...offer, allowed } : offer)
+    }
   }
   return offers
 }
 
-async function allowedOf(worktree, readLaunchInfo, readAllowed) {
-  const info = await readLaunchInfo(worktree.path).catch(() => null)
+async function allowedOf(worktree, agent, readLaunchInfo, readAllowed) {
+  const info = await readLaunchInfo(worktree.path, agent.paneKey).catch(() => null)
   return info && hasGrantHook(info.args) ? readAllowed(info.sessionId).catch(() => []) : []
 }
 

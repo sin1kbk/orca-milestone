@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createNextSender, nextOffer, parseSuggestions } from '../src/next-actions.mjs'
+import { createNextSender, nextOffer, offersOf, parseSuggestions } from '../src/next-actions.mjs'
 import { buildModel } from '../src/model.mjs'
 import { renderBody } from '../src/render.mjs'
 
@@ -16,6 +16,8 @@ const agent = (extra = {}) => ({
   ...extra
 })
 const worktree = (agents, extra = {}) => ({ path: '/work/app', agents, ...extra })
+// The offer of the workspace's first agent.
+const offerOf = (wt, launch) => nextOffer(wt, wt.agents[0], launch)
 
 test('parseSuggestions keeps up to three valid buttons from a block at the very end', () => {
   assert.deepEqual(parseSuggestions(block([proposal({ reason: ' 確認が済んだため ' })])), [{ ...proposal(), reason: '確認が済んだため' }])
@@ -32,25 +34,30 @@ test('a bad reason costs only the reason', () => {
   for (const reason of [undefined, 3, '', 'a\nb']) assert.equal(parseSuggestions(block([proposal({ reason })]))[0].reason, '', String(reason))
 })
 
-test('nextOffer comes from the one live main agent that finished its turn', () => {
-  const offer = nextOffer(worktree([agent()]))
+test('nextOffer comes from an agent that finished its turn', () => {
+  const offer = offerOf(worktree([agent()]))
   assert.equal(offer.path, '/work/app')
   assert.equal(offer.agent, 'claude')
   assert.equal(offer.paneKey, 'tab:leaf')
   assert.equal(offer.suggestions.length, 1)
-  assert.notEqual(offer.id, nextOffer(worktree([agent({ stateStartedAt: 6 })])).id, 'another turn, another offer')
-  const none = (wt) => assert.equal(nextOffer(wt), null)
+  assert.notEqual(offer.id, offerOf(worktree([agent({ stateStartedAt: 6 })])).id, 'another turn, another offer')
+  const none = (wt) => assert.equal(offerOf(wt), null)
   none(worktree([agent({ state: 'working' })]))
   none(worktree([agent({ lastAssistantMessage: 'no block' })]))
-  none(worktree([agent(), agent({ paneKey: 'tab:other' })]))
-  none(worktree([agent({ agentType: 'gemini' })]))
-  none(worktree([agent()], { isArchived: true }))
-  // A closed pane's record and a teammate do not count as a second agent.
-  assert.ok(nextOffer(worktree([agent(), agent({ paneKey: 'old', hasLivePty: undefined }), agent({ paneKey: 'mate', parentPaneKey: 'tab:leaf' })])))
+})
+
+test('offersOf gives each live main agent of a workspace its own offer, for its own pane', async () => {
+  const two = await offersOf([worktree([agent(), agent({ paneKey: 'tab:other', stateStartedAt: 6 })])])
+  assert.deepEqual(two.map((offer) => offer.paneKey), ['tab:leaf', 'tab:other'])
+  assert.notEqual(two[0].id, two[1].id)
+  // A closed pane's record, a teammate and an agent of another kind make no offer.
+  const one = await offersOf([worktree([agent(), agent({ paneKey: 'old', hasLivePty: undefined }), agent({ paneKey: 'mate', parentPaneKey: 'tab:leaf' }), agent({ paneKey: 'g', agentType: 'gemini' })])])
+  assert.deepEqual(one.map((offer) => offer.paneKey), ['tab:leaf'])
+  assert.deepEqual(await offersOf([worktree([agent()], { isArchived: true })]), [])
 })
 
 function setupSender({ agentType = 'claude', screen = '? for shortcuts', accepted = true, terminals } = {}) {
-  const offer = nextOffer(worktree([agent({ agentType })]))
+  const offer = offerOf(worktree([agent({ agentType })]))
   const calls = []
   const send = createNextSender({
     readOffers: async () => [offer],
@@ -100,7 +107,7 @@ test('a refused send throws and the button can be pressed again', async () => {
 })
 
 test('the focused workspace shows its offer as cards, escaped, under its tasks', () => {
-  const offer = nextOffer(worktree([agent({ lastAssistantMessage: block([proposal({ label: '<b>直す</b>', reason: '理由 & 背景' })]) })]))
+  const offer = offerOf(worktree([agent({ lastAssistantMessage: block([proposal({ label: '<b>直す</b>', reason: '理由 & 背景' })]) })]))
   const sessions = [{ listId: 'l', cwd: '/work/app', goal: 'g', updatedAt: 1, tasks: [{ subject: 't', status: 'completed' }] }]
   const html = renderBody(buildModel({ path: '/work/app', displayName: 'app', agentStates: ['done'] }, sessions, [], [offer]))
   assert.ok(html.includes(`data-next="${offer.id}" data-index="0"`))

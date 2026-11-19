@@ -38,6 +38,9 @@ li .strike { background: linear-gradient(currentColor, currentColor) 0 55% / 0 1
 li.completed .strike { background-size: 100% 1px; }
 li.in_progress { font-weight: 600; }
 .empty { color: var(--orca-muted-foreground); }
+.pane { margin-bottom: 14px; }
+.pane-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 0 6px; font-size: 12px; font-weight: 600; }
+.pane-head .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 code { font-size: 12px; }
 .others { flex: none; padding-top: 12px; border-top: 1px solid var(--orca-border); }
 .others h2 { display: flex; justify-content: space-between; align-items: baseline; margin: 0 0 6px;
@@ -68,7 +71,7 @@ code { font-size: 12px; }
 .row.attention .dot, .row .dot.running { background: var(--ms-todo); }
 .row .check { flex: none; width: 8px; font-size: 11px; font-weight: 700; line-height: 1; text-align: center; color: var(--ms-done); }
 .row .name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row .repo { margin-left: 6px; font-size: 11px; color: var(--orca-muted-foreground); }
+.row .repo, .row .title { margin-left: 6px; font-size: 11px; color: var(--orca-muted-foreground); }
 .row .badge { flex: none; padding: 0 6px; border-radius: 4px; font-size: 10px; font-weight: 700; line-height: 16px;
   color: var(--ms-todo); background: color-mix(in oklch, var(--ms-todo) 18%, transparent); }
 .row .working { flex: none; font-size: 11px; font-weight: 600; color: var(--ms-working); }

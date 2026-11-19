@@ -31,7 +31,7 @@ export async function readCodexProgress(dir, { running = isRunning } = {}) {
             await rm(file, { force: true })
             return null
           }
-          return { listId: name.slice(0, -'.json'.length), cwd, goal, updatedAt, tasks }
+          return { listId: name.slice(0, -'.json'.length), pid, cwd, goal, updatedAt, tasks }
         } catch {
           return null
         }

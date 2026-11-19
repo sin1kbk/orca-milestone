@@ -115,6 +115,8 @@ function renderRow(row) {
   const of = row.total > 0 ? `<span class="of">${row.done} / ${row.total}</span>` : ''
   const bar = row.total > 0 ? `<div class="bar"><div style="width:${percent}%"></div></div>` : ''
   const repo = row.repo ? `<span class="repo">${escape(row.repo)}</span>` : ''
+  // One of several agents in the workspace: its conversation tells it from the others.
+  const title = row.title ? `<span class="title">${escape(clip(row.title, GOAL_MAX))}</span>` : ''
   // Every task done, nothing asked of the user: a check instead of the dot. A task in
   // progress turns the dot orange, like its mark in the list.
   const finished = row.kind !== 'attention' && row.total > 0 && row.done === row.total
@@ -124,8 +126,8 @@ function renderRow(row) {
     : running
       ? '<span class="dot running"></span>'
       : '<span class="dot"></span>'
-  const head = `<div class="top">${mark}<span class="name">${escape(row.workspace)}${repo}</span>${badge}${of}</div>${bar}`
-  const key = escape(`${row.workspace}\n${row.repo ?? ''}\n${clip(row.goal ?? '', GOAL_MAX)}`)
+  const head = `<div class="top">${mark}<span class="name">${escape(row.workspace)}${repo}${title}</span>${badge}${of}</div>${bar}`
+  const key = escape(`${row.workspace}\n${row.repo ?? ''}\n${row.paneKey ?? ''}\n${clip(row.goal ?? '', GOAL_MAX)}`)
   const button = `<div class="head" role="button" tabindex="0" data-open="${escape(row.path)}">${head}</div>`
   if (row.total === 0) return `<li class="row ${row.kind}" data-key="${key}">${button}</li>`
   // Hovering a row's head expands its goal and tasks; plain CSS, so it needs no script.
@@ -156,5 +158,16 @@ function renderFocused(model) {
   if (model.kind === 'no-tasks') {
     return `${header}<p class="empty">このワークスペースのエージェントはまだタスクを作っていません。</p>${renderNext(model.next)}`
   }
+  if (model.kind === 'agents') {
+    return header + model.agents.map(renderAgent).join('') + model.sessions.map(renderSession).join('')
+  }
   return header + model.sessions.map(renderSession).join('') + renderNext(model.next)
+}
+
+/** One of several agents in the focused workspace: its name and state, its tasks and its offer. */
+function renderAgent(agent) {
+  const title = escape(clip(agent.title ?? 'エージェント', GOAL_MAX))
+  const head = `<h2 class="pane-head"><span class="title">${title}</span><span class="agent ${agent.agent}">${AGENT_LABELS[agent.agent] ?? ''}</span></h2>`
+  const body = agent.sessions.length > 0 ? agent.sessions.map(renderSession).join('') : '<p class="empty">まだタスクを作っていません。</p>'
+  return `<div class="pane" data-key="${escape(`pane\n${agent.paneKey}`)}">${head}${body}${renderNext(agent.next)}</div>`
 }

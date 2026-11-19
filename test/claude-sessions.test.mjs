@@ -4,13 +4,14 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import {
   claudePaths,
+  createSessionsOf,
   findListTranscript,
   findTranscript,
   currentGoal,
   listRecentTaskLists,
   isListRunning,
   readPromptBeforeTask,
-  readRunningSessionIds,
+  readRunningSessions,
   readTasksFromTranscript,
   readTaskList,
   readTranscriptHead
@@ -115,13 +116,13 @@ test('readPromptBeforeTask finds the request a task was created for, across chun
   assert.equal(await readPromptBeforeTask(path, 'Missing step'), null)
 })
 
-test('readRunningSessionIds keeps sessions whose process runs; isListRunning matches team lists by prefix', async () => {
+test('readRunningSessions keeps sessions whose process runs; isListRunning matches team lists by prefix', async () => {
   const home = await makeHome()
   const { sessionsRoot } = claudePaths(home)
   await markRunning(home, SESSION_A)
   await writeFile(join(sessionsRoot, '999999.json'), JSON.stringify({ pid: 2 ** 22 + 7, sessionId: SESSION_B }))
   await writeFile(join(sessionsRoot, '1.other.key'), 'not a session')
-  const running = await readRunningSessionIds(sessionsRoot)
+  const running = new Set((await readRunningSessions(sessionsRoot)).map((entry) => entry.sessionId))
   assert.deepEqual([...running], [SESSION_A])
   assert.ok(isListRunning(SESSION_A, running))
   assert.ok(isListRunning('session-11111111', running))
@@ -148,4 +149,24 @@ test('readTasksFromTranscript replays the list, starting over once a finished li
     [['3', 'B1', 'in_progress'], ['4', 'B2 renamed', 'pending']]
   )
   assert.deepEqual([tasks[0].activeForm, tasks[0].metadata], ['Doing B1', { goal: 'B' }])
+})
+
+test('createSessionsOf gives an agent the session in its own pane, never one in another pane', async () => {
+  const home = await makeHome()
+  const { sessionsRoot } = claudePaths(home)
+  await mkdir(sessionsRoot, { recursive: true })
+  // Two processes that run: this test and its parent.
+  const write = (pid, sessionId, cwd) => writeFile(join(sessionsRoot, `${pid}.json`), JSON.stringify({ pid, sessionId, cwd }))
+  await write(process.pid, SESSION_A, '/work/app')
+  await write(process.ppid, SESSION_B, '/work/app/pkg')
+  const ids = (sessions) => sessions.map((entry) => entry.sessionId)
+  const panes = { [process.pid]: 'tab:a', [process.ppid]: 'tab:b' }
+  const sessionsOf = createSessionsOf(home, { paneOf: async (pid) => panes[pid] ?? null })
+  assert.deepEqual(ids(await sessionsOf('/work/app', 'tab:a')), [SESSION_A])
+  assert.deepEqual(ids(await sessionsOf('/work/app', 'tab:b')), [SESSION_B])
+  assert.deepEqual(ids(await sessionsOf('/work/app', 'tab:c')), [], 'not the session of another pane')
+  assert.deepEqual(ids(await sessionsOf('/work/other', 'tab:a')), [])
+  // A session in no Orca pane, as one started outside Orca, goes by its folder.
+  const outside = createSessionsOf(home, { paneOf: async (pid) => (pid === process.pid ? 'tab:a' : null) })
+  assert.deepEqual(ids(await outside('/work/app', 'tab:c')), [SESSION_B])
 })
